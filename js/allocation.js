@@ -1,6 +1,57 @@
 var Flex = window.Flex || {};
 
 Flex.allocation = {
+  forbidsContinuous: function (state) {
+    var cfg = state && state.simulationConfig;
+    return !!(cfg && (cfg.scenario === "no_continuous" || cfg.forbidContinuousDays));
+  },
+
+  datesAreAdjacent: function (a, b) {
+    var da = Flex.utils.parseISODate(a);
+    var db = Flex.utils.parseISODate(b);
+    return Math.abs((db - da) / 86400000) === 1;
+  },
+
+  hasConsecutiveDates: function (dateList) {
+    var sorted = (dateList || []).slice().sort();
+    for (var i = 1; i < sorted.length; i++) {
+      if (Flex.allocation.datesAreAdjacent(sorted[i - 1], sorted[i])) return true;
+    }
+    return false;
+  },
+
+  consecutiveViolations: function (selectedDays) {
+    var byOrg = {};
+    (selectedDays || []).forEach(function (day) {
+      if (!byOrg[day.organizerId]) byOrg[day.organizerId] = [];
+      byOrg[day.organizerId].push(day);
+    });
+    var violations = [];
+    Object.keys(byOrg).forEach(function (orgId) {
+      var days = byOrg[orgId].slice().sort(function (a, b) { return a.date < b.date ? -1 : 1; });
+      for (var i = 1; i < days.length; i++) {
+        if (Flex.allocation.datesAreAdjacent(days[i - 1].date, days[i].date)) {
+          violations.push({
+            organizerId: orgId,
+            organizerName: days[i].organizerName || orgId,
+            dates: [days[i - 1].date, days[i].date]
+          });
+        }
+      }
+    });
+    return violations;
+  },
+
+  pickNonAdjacent: function (available, count) {
+    var picked = [];
+    (available || []).forEach(function (iso) {
+      if (picked.length >= count) return;
+      var clash = picked.some(function (p) { return Flex.allocation.datesAreAdjacent(p, iso); });
+      if (!clash) picked.push(iso);
+    });
+    return picked.length >= count ? picked.slice(0, count) : null;
+  },
+
   validateHardConstraints: function (selectedDays, state, inventory) {
     var penalties = [];
     var organizers = state.organizers;
@@ -31,6 +82,13 @@ Flex.allocation = {
         penalties.push("No remaining capacity for " + day.organizerName + " on " + Flex.utils.formatDate(day.date) + ".");
       }
     });
+
+    if (Flex.allocation.forbidsContinuous(state)) {
+      Flex.allocation.consecutiveViolations(selectedDays).forEach(function (v) {
+        penalties.push(v.organizerName + " cannot be used on consecutive days (" +
+          Flex.utils.formatDate(v.dates[0]) + " and " + Flex.utils.formatDate(v.dates[1]) + ").");
+      });
+    }
 
     return {
       valid: penalties.length === 0,
@@ -117,6 +175,7 @@ Flex.allocation = {
     var prefs = state.preferences[customer.id] || {};
     var beamWidth = (state.settings && state.settings.beamWidth) || 28;
     var maxCandidates = (state.settings && state.settings.maxCandidates) || 40;
+    var forbidContinuous = Flex.allocation.forbidsContinuous(state);
 
     var beam = [{ assigned: {}, used: {}, prefScore: 0 }];
 
@@ -143,7 +202,10 @@ Flex.allocation = {
         });
         if (avail.length < laterOrg.requiredDays) return false;
         avail.sort(function (a, b) { return (inventory[laterOrg.id][b] || 0) - (inventory[laterOrg.id][a] || 0); });
-        var take = avail.slice(0, laterOrg.requiredDays);
+        var take = forbidContinuous
+          ? Flex.allocation.pickNonAdjacent(avail, laterOrg.requiredDays)
+          : avail.slice(0, laterOrg.requiredDays);
+        if (!take) return false;
         free = free.filter(function (iso) { return take.indexOf(iso) === -1; });
       }
       return true;
@@ -181,11 +243,13 @@ Flex.allocation = {
           var pool = lastOrg ? unused.filter(function (iso) { return available.indexOf(iso) !== -1; }) : available.slice(0, poolSize);
           if (lastOrg && pool.length !== unused.length) return;
           Flex.utils.combinations(pool, size).forEach(function (combo) { combos.push(combo); });
-          Flex.utils.findConsecutiveBlocks(available, size).forEach(function (block) {
-            var key = block.join("|");
-            var exists = combos.some(function (c) { return c.slice().sort().join("|") === key; });
-            if (!exists) combos.push(block.slice());
-          });
+          if (!forbidContinuous) {
+            Flex.utils.findConsecutiveBlocks(available, size).forEach(function (block) {
+              var key = block.join("|");
+              var exists = combos.some(function (c) { return c.slice().sort().join("|") === key; });
+              if (!exists) combos.push(block.slice());
+            });
+          }
         });
 
         var seenCombo = {};
@@ -200,6 +264,7 @@ Flex.allocation = {
             used[iso] = true;
           });
           if (clash) return;
+          if (forbidContinuous && Flex.allocation.hasConsecutiveDates(combo)) return;
           if (!leftoverFeasible(used, orgIndex)) return;
           var assigned = Object.assign({}, stateNode.assigned);
           assigned[org.id] = combo.slice();
@@ -232,7 +297,7 @@ Flex.allocation = {
     });
 
     if (!candidates.length) {
-      var fallback = Flex.allocation.capacityFirstAssignment(dates, organizers, inventory);
+      var fallback = Flex.allocation.capacityFirstAssignment(dates, organizers, inventory, forbidContinuous);
       if (fallback) {
         candidates.push({
           assigned: fallback,
@@ -245,7 +310,7 @@ Flex.allocation = {
     return candidates.slice(0, maxCandidates);
   },
 
-  capacityFirstAssignment: function (dates, organizers, inventory) {
+  capacityFirstAssignment: function (dates, organizers, inventory, forbidContinuous) {
     var used = {};
     var assigned = {};
     var orgs = organizers.slice().sort(function (a, b) {
@@ -262,12 +327,19 @@ Flex.allocation = {
         return (inventory[org.id][b] || 0) - (inventory[org.id][a] || 0);
       });
       if (available.length < org.requiredDays) return null;
-      assigned[org.id] = available.slice(0, org.requiredDays);
+      var picked = forbidContinuous
+        ? Flex.allocation.pickNonAdjacent(available, org.requiredDays)
+        : available.slice(0, org.requiredDays);
+      if (!picked) return null;
+      assigned[org.id] = picked;
       assigned[org.id].forEach(function (iso) { used[iso] = true; });
     }
     dates.filter(function (iso) { return !used[iso]; }).forEach(function (iso) {
       var candidate = orgs.filter(function (org) {
-        return assigned[org.id].length < Flex.data.maxDays(org) && inventory[org.id] && inventory[org.id][iso] > 0;
+        if (assigned[org.id].length >= Flex.data.maxDays(org)) return false;
+        if (!inventory[org.id] || inventory[org.id][iso] <= 0) return false;
+        if (forbidContinuous && assigned[org.id].some(function (d) { return Flex.allocation.datesAreAdjacent(d, iso); })) return false;
+        return true;
       }).sort(function (a, b) {
         var slackA = Flex.data.maxDays(a) - assigned[a.id].length;
         var slackB = Flex.data.maxDays(b) - assigned[b.id].length;

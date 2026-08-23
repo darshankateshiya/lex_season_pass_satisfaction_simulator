@@ -199,6 +199,11 @@ Flex.SCENARIOS = {
     id: "sudden_shift",
     name: "Sudden Demand Shift",
     description: "12 Oct starts low, then receives a concentrated booking-velocity spike."
+  },
+  no_continuous: {
+    id: "no_continuous",
+    name: "No continuous-day allowed",
+    description: "Same organizer cannot be used on adjacent dates. If 17 Oct is Organizer A, 16 Oct and 18 Oct cannot also be Organizer A."
   }
 };
 

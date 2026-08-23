@@ -197,7 +197,9 @@ Flex.satisfaction = {
     if (sat.futureProtectionScore >= 80) {
       reasons.push("✓ Scarce inventory was protected for future customers");
     }
-    if (sat.continuityScore >= 70) {
+    if (Flex.allocation.forbidsContinuous(state)) {
+      reasons.push("✓ No consecutive same-organizer days — adjacent dates must use a different organizer");
+    } else if (sat.continuityScore >= 70) {
       reasons.push("✓ Continuity preference was considered");
     }
     if (allocation.fifoApplied) {

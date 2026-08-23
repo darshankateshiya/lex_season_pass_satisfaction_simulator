@@ -59,9 +59,14 @@ Flex.pages.tickets = function (root) {
       var choices = state.organizers.map(function (org) {
         var on = selected[d.date] === org.id;
         var atMax = c.byOrg[org.id] >= Flex.data.maxDays(org) && !on;
-        return '<label class="' + (on ? "is-on" : "") + (atMax ? " is-disabled" : "") + '"><input type="radio" name="org-' + d.date + '" value="' + org.id + '"' +
-          (on ? " checked" : "") + (atMax ? " disabled" : "") + '> ' + Flex.utils.escapeHtml(org.name) +
-          (atMax ? " <small>max " + Flex.data.maxDays(org) + "</small>" : "") + "</label>";
+        var adjacentBlocked = !on && Flex.allocation.forbidsContinuous(state) && Object.keys(selected).some(function (iso) {
+          return selected[iso] === org.id && Flex.allocation.datesAreAdjacent(iso, d.date);
+        });
+        var blocked = atMax || adjacentBlocked;
+        return '<label class="' + (on ? "is-on" : "") + (blocked ? " is-disabled" : "") + '"><input type="radio" name="org-' + d.date + '" value="' + org.id + '"' +
+          (on ? " checked" : "") + (blocked ? " disabled" : "") + '> ' + Flex.utils.escapeHtml(org.name) +
+          (atMax ? " <small>max " + Flex.data.maxDays(org) + "</small>" : "") +
+          (adjacentBlocked ? " <small>not next to same organizer</small>" : "") + "</label>";
       }).join("");
       return '<article class="day-card" data-date="' + d.date + '"><h3>' + Flex.utils.formatDate(d.date) +
         "</h3><div class='muted'>" + Flex.utils.weekdayName(d.date) + "</div>" +
@@ -152,6 +157,16 @@ Flex.pages.tickets = function (root) {
           Flex.ui.showToast("Cannot select " + org.name + ": max " + Flex.data.maxDays(org) + " days in this " + state.dates.length + "-day event.", "danger");
           paint();
           return;
+        }
+        if (org && Flex.allocation.forbidsContinuous(state)) {
+          var adjacent = Object.keys(selected).some(function (iso) {
+            return iso !== date && selected[iso] === org.id && Flex.allocation.datesAreAdjacent(iso, date);
+          });
+          if (adjacent) {
+            Flex.ui.showToast("Cannot select " + org.name + " on " + Flex.utils.formatDate(date) + ": same organizer is already on an adjacent day.", "danger");
+            paint();
+            return;
+          }
         }
         selected[date] = input.value;
         paint();

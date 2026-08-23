@@ -46,6 +46,16 @@ Flex.simulation = {
         ranked = [oct17, oct18, oct19].concat(rest);
       } else if (scenarioId === "sudden_shift" && oct12 && rng() < 0.55) {
         ranked = [oct12].concat(Flex.utils.shuffle(dates.filter(function (d) { return d !== oct12; }), rng));
+      } else if (scenarioId === "no_continuous") {
+        var sorted = dates.slice().sort();
+        var offset = orgIndex % 2;
+        var preferred = [];
+        var rest = [];
+        sorted.forEach(function (d, i) {
+          if (i % 2 === offset) preferred.push(d);
+          else rest.push(d);
+        });
+        ranked = preferred.concat(Flex.utils.shuffle(rest, rng));
       } else if (scenarioId === "random") {
         ranked = Flex.utils.shuffle(dates, rng);
       } else {
@@ -133,6 +143,7 @@ Flex.simulation = {
       processed: 0,
       running: false,
       paused: false,
+      forbidContinuousDays: config.scenario === "no_continuous",
       queue: generated.customers.map(function (c) { return c.id; })
     });
     Flex.data.persistCore(state);
