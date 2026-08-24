@@ -59,14 +59,20 @@ Flex.pages.tickets = function (root) {
       var choices = state.organizers.map(function (org) {
         var on = selected[d.date] === org.id;
         var atMax = c.byOrg[org.id] >= Flex.data.maxDays(org) && !on;
-        var adjacentBlocked = !on && Flex.allocation.forbidsContinuous(state) && Object.keys(selected).some(function (iso) {
-          return selected[iso] === org.id && Flex.allocation.datesAreAdjacent(iso, d.date);
+        var maxRun = Flex.allocation.maxConsecutiveDays(state);
+        var orgDates = Object.keys(selected).filter(function (iso) {
+          return selected[iso] === org.id && iso !== d.date;
         });
-        var blocked = atMax || adjacentBlocked;
+        var consecutiveBlocked = !on && maxRun != null &&
+          Flex.allocation.exceedsMaxConsecutive(orgDates.concat([d.date]), maxRun);
+        var blocked = atMax || consecutiveBlocked;
+        var consecutiveHint = "";
+        if (consecutiveBlocked && maxRun === 1) consecutiveHint = " <small>not next to same organizer</small>";
+        if (consecutiveBlocked && maxRun > 1) consecutiveHint = " <small>no 3-day continue</small>";
         return '<label class="' + (on ? "is-on" : "") + (blocked ? " is-disabled" : "") + '"><input type="radio" name="org-' + d.date + '" value="' + org.id + '"' +
           (on ? " checked" : "") + (blocked ? " disabled" : "") + '> ' + Flex.utils.escapeHtml(org.name) +
           (atMax ? " <small>max " + Flex.data.maxDays(org) + "</small>" : "") +
-          (adjacentBlocked ? " <small>not next to same organizer</small>" : "") + "</label>";
+          consecutiveHint + "</label>";
       }).join("");
       return '<article class="day-card" data-date="' + d.date + '"><h3>' + Flex.utils.formatDate(d.date) +
         "</h3><div class='muted'>" + Flex.utils.weekdayName(d.date) + "</div>" +
@@ -158,14 +164,22 @@ Flex.pages.tickets = function (root) {
           paint();
           return;
         }
-        if (org && Flex.allocation.forbidsContinuous(state)) {
-          var adjacent = Object.keys(selected).some(function (iso) {
-            return iso !== date && selected[iso] === org.id && Flex.allocation.datesAreAdjacent(iso, date);
-          });
-          if (adjacent) {
-            Flex.ui.showToast("Cannot select " + org.name + " on " + Flex.utils.formatDate(date) + ": same organizer is already on an adjacent day.", "danger");
-            paint();
-            return;
+        if (org) {
+          var maxRun = Flex.allocation.maxConsecutiveDays(state);
+          if (maxRun != null) {
+            var orgDates = Object.keys(selected).filter(function (iso) {
+              return iso !== date && selected[iso] === org.id;
+            });
+            if (Flex.allocation.exceedsMaxConsecutive(orgDates.concat([date]), maxRun)) {
+              Flex.ui.showToast(
+                maxRun === 1
+                  ? ("Cannot select " + org.name + " on " + Flex.utils.formatDate(date) + ": same organizer is already on an adjacent day.")
+                  : ("Cannot select " + org.name + " on " + Flex.utils.formatDate(date) + ": no 3-day continue. 14 or 20 is still allowed if it is not next to the 2-day block."),
+                "danger"
+              );
+              paint();
+              return;
+            }
           }
         }
         selected[date] = input.value;

@@ -56,6 +56,26 @@ Flex.simulation = {
           else rest.push(d);
         });
         ranked = preferred.concat(Flex.utils.shuffle(rest, rng));
+      } else if (scenarioId === "max_2_continuous") {
+        var allDates = dates.slice().sort();
+        var pair = (oct17 && oct18) ? [oct17, oct18] : [];
+        if (!pair.length) {
+          for (var p = 0; p < allDates.length - 1; p++) {
+            if (Flex.allocation.datesAreAdjacent(allDates[p], allDates[p + 1])) {
+              pair = [allDates[p], allDates[p + 1]];
+              break;
+            }
+          }
+        }
+        var isolated = [];
+        var edge = [];
+        allDates.forEach(function (d) {
+          if (pair.indexOf(d) !== -1) return;
+          var touchesPair = pair.some(function (pd) { return Flex.allocation.datesAreAdjacent(pd, d); });
+          if (touchesPair) edge.push(d);
+          else isolated.push(d);
+        });
+        ranked = pair.concat(isolated).concat(edge);
       } else if (scenarioId === "random") {
         ranked = Flex.utils.shuffle(dates, rng);
       } else {
@@ -144,6 +164,7 @@ Flex.simulation = {
       running: false,
       paused: false,
       forbidContinuousDays: config.scenario === "no_continuous",
+      maxConsecutiveDays: config.scenario === "no_continuous" ? 1 : (config.scenario === "max_2_continuous" ? 2 : null),
       queue: generated.customers.map(function (c) { return c.id; })
     });
     Flex.data.persistCore(state);

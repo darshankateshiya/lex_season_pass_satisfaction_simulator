@@ -62,7 +62,8 @@ Flex.pages.customers = function (root) {
             { id: "popular_day_bias", name: "Popular-day bias" },
             { id: "organizer_bias", name: "Organizer bias" },
             { id: "continuous_bias", name: "Continuous-day bias" },
-            { id: "no_continuous", name: "No continuous-day allowed" }
+            { id: "no_continuous", name: "No continuous-day allowed" },
+            { id: "max_2_continuous", name: "No 3-day continue" }
           ], "balanced_pref"),
           help: "Used later if you allocate. Tickets are not created now."
         }) +

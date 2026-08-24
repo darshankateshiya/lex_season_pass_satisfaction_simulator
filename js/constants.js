@@ -204,6 +204,11 @@ Flex.SCENARIOS = {
     id: "no_continuous",
     name: "No continuous-day allowed",
     description: "Same organizer cannot be used on adjacent dates. If 17 Oct is Organizer A, 16 Oct and 18 Oct cannot also be Organizer A."
+  },
+  max_2_continuous: {
+    id: "max_2_continuous",
+    name: "No 3-day continue",
+    description: "Same organizer cannot be used on 3 days in a row. A 2-day block is allowed (17–18 or 16–17). Other days like 14 or 20 are still allowed because they are not attached to that block."
   }
 };
 

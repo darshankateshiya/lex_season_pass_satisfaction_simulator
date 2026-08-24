@@ -197,8 +197,11 @@ Flex.satisfaction = {
     if (sat.futureProtectionScore >= 80) {
       reasons.push("✓ Scarce inventory was protected for future customers");
     }
-    if (Flex.allocation.forbidsContinuous(state)) {
+    var maxRun = Flex.allocation.maxConsecutiveDays(state);
+    if (maxRun === 1) {
       reasons.push("✓ No consecutive same-organizer days — adjacent dates must use a different organizer");
+    } else if (maxRun > 1) {
+      reasons.push("✓ No 3-day continue — a 2-day block is allowed, and isolated days like 14 or 20 are still allowed");
     } else if (sat.continuityScore >= 70) {
       reasons.push("✓ Continuity preference was considered");
     }

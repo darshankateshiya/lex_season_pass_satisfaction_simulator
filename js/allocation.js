@@ -1,9 +1,20 @@
 var Flex = window.Flex || {};
 
 Flex.allocation = {
-  forbidsContinuous: function (state) {
+  maxConsecutiveDays: function (state) {
     var cfg = state && state.simulationConfig;
-    return !!(cfg && (cfg.scenario === "no_continuous" || cfg.forbidContinuousDays));
+    if (!cfg) return null;
+    if (cfg.maxConsecutiveDays != null && cfg.maxConsecutiveDays !== "") {
+      var n = Number(cfg.maxConsecutiveDays);
+      if (!isNaN(n) && n > 0) return n;
+    }
+    if (cfg.scenario === "no_continuous" || cfg.forbidContinuousDays) return 1;
+    if (cfg.scenario === "max_2_continuous") return 2;
+    return null;
+  },
+
+  forbidsContinuous: function (state) {
+    return Flex.allocation.maxConsecutiveDays(state) === 1;
   },
 
   datesAreAdjacent: function (a, b) {
@@ -12,15 +23,24 @@ Flex.allocation = {
     return Math.abs((db - da) / 86400000) === 1;
   },
 
-  hasConsecutiveDates: function (dateList) {
-    var sorted = (dateList || []).slice().sort();
-    for (var i = 1; i < sorted.length; i++) {
-      if (Flex.allocation.datesAreAdjacent(sorted[i - 1], sorted[i])) return true;
-    }
-    return false;
+  longestRun: function (dateList) {
+    var runs = Flex.utils.consecutiveRuns((dateList || []).slice().sort());
+    var max = 0;
+    runs.forEach(function (run) { if (run.length > max) max = run.length; });
+    return max;
   },
 
-  consecutiveViolations: function (selectedDays) {
+  exceedsMaxConsecutive: function (dateList, maxRun) {
+    if (maxRun == null) return false;
+    return Flex.allocation.longestRun(dateList) > maxRun;
+  },
+
+  hasConsecutiveDates: function (dateList) {
+    return Flex.allocation.exceedsMaxConsecutive(dateList, 1);
+  },
+
+  consecutiveViolations: function (selectedDays, maxRun) {
+    if (maxRun == null) maxRun = 1;
     var byOrg = {};
     (selectedDays || []).forEach(function (day) {
       if (!byOrg[day.organizerId]) byOrg[day.organizerId] = [];
@@ -29,27 +49,40 @@ Flex.allocation = {
     var violations = [];
     Object.keys(byOrg).forEach(function (orgId) {
       var days = byOrg[orgId].slice().sort(function (a, b) { return a.date < b.date ? -1 : 1; });
-      for (var i = 1; i < days.length; i++) {
-        if (Flex.allocation.datesAreAdjacent(days[i - 1].date, days[i].date)) {
+      var dates = days.map(function (d) { return d.date; });
+      Flex.utils.consecutiveRuns(dates).forEach(function (run) {
+        if (run.length > maxRun) {
           violations.push({
             organizerId: orgId,
-            organizerName: days[i].organizerName || orgId,
-            dates: [days[i - 1].date, days[i].date]
+            organizerName: days[0].organizerName || orgId,
+            dates: run,
+            length: run.length
           });
         }
-      }
+      });
     });
     return violations;
   },
 
   pickNonAdjacent: function (available, count) {
-    var picked = [];
-    (available || []).forEach(function (iso) {
-      if (picked.length >= count) return;
-      var clash = picked.some(function (p) { return Flex.allocation.datesAreAdjacent(p, iso); });
-      if (!clash) picked.push(iso);
-    });
-    return picked.length >= count ? picked.slice(0, count) : null;
+    return Flex.allocation.pickWithMaxRun(available, count, 1);
+  },
+
+  pickWithMaxRun: function (available, count, maxRun) {
+    if (maxRun == null) return (available || []).slice(0, count);
+    function tryPick(order) {
+      var picked = [];
+      (order || []).forEach(function (iso) {
+        if (picked.length >= count) return;
+        if (!Flex.allocation.exceedsMaxConsecutive(picked.concat([iso]), maxRun)) {
+          picked.push(iso);
+        }
+      });
+      return picked.length >= count ? picked.slice(0, count) : null;
+    }
+    var first = tryPick(available);
+    if (first) return first;
+    return tryPick((available || []).slice().sort());
   },
 
   validateHardConstraints: function (selectedDays, state, inventory) {
@@ -83,10 +116,17 @@ Flex.allocation = {
       }
     });
 
-    if (Flex.allocation.forbidsContinuous(state)) {
-      Flex.allocation.consecutiveViolations(selectedDays).forEach(function (v) {
-        penalties.push(v.organizerName + " cannot be used on consecutive days (" +
-          Flex.utils.formatDate(v.dates[0]) + " and " + Flex.utils.formatDate(v.dates[1]) + ").");
+    var maxRun = Flex.allocation.maxConsecutiveDays(state);
+    if (maxRun != null) {
+      Flex.allocation.consecutiveViolations(selectedDays, maxRun).forEach(function (v) {
+        penalties.push(
+          maxRun === 1
+            ? (v.organizerName + " cannot be used on consecutive days (" +
+              v.dates.map(function (d) { return Flex.utils.formatDate(d); }).join(", ") + ").")
+            : (v.organizerName + " cannot have a 3-day continue (" +
+              v.dates.map(function (d) { return Flex.utils.formatDate(d); }).join(", ") +
+              "). A 2-day block is allowed, and isolated days like 14 or 20 are still allowed.")
+        );
       });
     }
 
@@ -175,7 +215,7 @@ Flex.allocation = {
     var prefs = state.preferences[customer.id] || {};
     var beamWidth = (state.settings && state.settings.beamWidth) || 28;
     var maxCandidates = (state.settings && state.settings.maxCandidates) || 40;
-    var forbidContinuous = Flex.allocation.forbidsContinuous(state);
+    var maxRun = Flex.allocation.maxConsecutiveDays(state);
 
     var beam = [{ assigned: {}, used: {}, prefScore: 0 }];
 
@@ -202,8 +242,8 @@ Flex.allocation = {
         });
         if (avail.length < laterOrg.requiredDays) return false;
         avail.sort(function (a, b) { return (inventory[laterOrg.id][b] || 0) - (inventory[laterOrg.id][a] || 0); });
-        var take = forbidContinuous
-          ? Flex.allocation.pickNonAdjacent(avail, laterOrg.requiredDays)
+        var take = maxRun != null
+          ? Flex.allocation.pickWithMaxRun(avail, laterOrg.requiredDays, maxRun)
           : avail.slice(0, laterOrg.requiredDays);
         if (!take) return false;
         free = free.filter(function (iso) { return take.indexOf(iso) === -1; });
@@ -243,7 +283,7 @@ Flex.allocation = {
           var pool = lastOrg ? unused.filter(function (iso) { return available.indexOf(iso) !== -1; }) : available.slice(0, poolSize);
           if (lastOrg && pool.length !== unused.length) return;
           Flex.utils.combinations(pool, size).forEach(function (combo) { combos.push(combo); });
-          if (!forbidContinuous) {
+          if (maxRun == null || size <= maxRun) {
             Flex.utils.findConsecutiveBlocks(available, size).forEach(function (block) {
               var key = block.join("|");
               var exists = combos.some(function (c) { return c.slice().sort().join("|") === key; });
@@ -264,7 +304,7 @@ Flex.allocation = {
             used[iso] = true;
           });
           if (clash) return;
-          if (forbidContinuous && Flex.allocation.hasConsecutiveDates(combo)) return;
+          if (maxRun != null && Flex.allocation.exceedsMaxConsecutive(combo, maxRun)) return;
           if (!leftoverFeasible(used, orgIndex)) return;
           var assigned = Object.assign({}, stateNode.assigned);
           assigned[org.id] = combo.slice();
@@ -297,7 +337,7 @@ Flex.allocation = {
     });
 
     if (!candidates.length) {
-      var fallback = Flex.allocation.capacityFirstAssignment(dates, organizers, inventory, forbidContinuous);
+      var fallback = Flex.allocation.capacityFirstAssignment(dates, organizers, inventory, maxRun);
       if (fallback) {
         candidates.push({
           assigned: fallback,
@@ -310,7 +350,7 @@ Flex.allocation = {
     return candidates.slice(0, maxCandidates);
   },
 
-  capacityFirstAssignment: function (dates, organizers, inventory, forbidContinuous) {
+  capacityFirstAssignment: function (dates, organizers, inventory, maxRun) {
     var used = {};
     var assigned = {};
     var orgs = organizers.slice().sort(function (a, b) {
@@ -327,8 +367,8 @@ Flex.allocation = {
         return (inventory[org.id][b] || 0) - (inventory[org.id][a] || 0);
       });
       if (available.length < org.requiredDays) return null;
-      var picked = forbidContinuous
-        ? Flex.allocation.pickNonAdjacent(available, org.requiredDays)
+      var picked = maxRun != null
+        ? Flex.allocation.pickWithMaxRun(available, org.requiredDays, maxRun)
         : available.slice(0, org.requiredDays);
       if (!picked) return null;
       assigned[org.id] = picked;
@@ -338,7 +378,7 @@ Flex.allocation = {
       var candidate = orgs.filter(function (org) {
         if (assigned[org.id].length >= Flex.data.maxDays(org)) return false;
         if (!inventory[org.id] || inventory[org.id][iso] <= 0) return false;
-        if (forbidContinuous && assigned[org.id].some(function (d) { return Flex.allocation.datesAreAdjacent(d, iso); })) return false;
+        if (maxRun != null && Flex.allocation.exceedsMaxConsecutive(assigned[org.id].concat([iso]), maxRun)) return false;
         return true;
       }).sort(function (a, b) {
         var slackA = Flex.data.maxDays(a) - assigned[a.id].length;
